@@ -7,21 +7,28 @@ import com.example.filemanagement.Helpers.FileHelper;
 import com.example.filemanagement.Helpers.FolderHelper;
 import com.example.filemanagement.Models.FileModel;
 import com.example.filemanagement.Models.FolderModel;
+import com.example.filemanagement.Models.UserModel;
 import com.example.filemanagement.Repositories.FileRepository;
 import com.example.filemanagement.Repositories.FolderRepository;
+import com.example.filemanagement.Repositories.UserRepository;
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
+import java.io.*;
 import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 @Service
@@ -29,14 +36,18 @@ public class FolderService {
 
     private final FolderRepository folderRepository;
     private final FileRepository fileRepository;
+    private final UserRepository userRepository;
     private final FolderHelper folderHelpers;
     private final FileHelper fileHelper;
+    private final FileService fileService;
 
-    public FolderService(FolderRepository folderRepository, FileRepository fileRepository, FolderHelper folderHelpers, FileHelper fileHelper) {
+    public FolderService(FolderRepository folderRepository, FileRepository fileRepository, UserRepository userRepository, FolderHelper folderHelpers, FileHelper fileHelper, FileService fileService) {
         this.folderRepository = folderRepository;
         this.fileRepository = fileRepository;
+        this.userRepository = userRepository;
         this.folderHelpers = folderHelpers;
         this.fileHelper = fileHelper;
+        this.fileService = fileService;
     }
 
 
@@ -62,6 +73,176 @@ public class FolderService {
 
         // Convert back Entity -> DTO
         return folderHelpers.mapToDto(savedFolder);
+    }
+
+    public void importFromZip(MultipartFile zipFile, Long userId, Long parentFolderId) throws IOException {
+        UserModel user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
+        FolderModel parentFolder = null;
+        if (parentFolderId != null) {
+            parentFolder = folderRepository.findById(parentFolderId)
+                    .orElseThrow(() -> new IllegalArgumentException("Parent folder not found"));
+        }
+
+        File tempDir = createTempDirectory();
+        try {
+            // Extract zip to temp directory
+            try (ZipInputStream zipIn = new ZipInputStream(zipFile.getInputStream())) {
+                extractZip(zipIn, tempDir);
+            }
+
+            // Process the contents of temp directory directly
+            File[] contents = tempDir.listFiles();
+            if (contents != null) {
+                for (File item : contents) {
+                    if (item.isDirectory()) {
+                        processDirectory(item, parentFolder, user);
+                    } else {
+                        // Handle files in root
+                        processFile(item, parentFolder, user);
+                    }
+                }
+            }
+        } finally {
+            // Clean up temp directory
+            FileUtils.deleteDirectory(tempDir);
+        }
+    }
+
+    private FolderModel processDirectory(File directory, FolderModel parentFolder, UserModel user) throws IOException {
+        // Try to find existing folder or create new one
+        FolderModel currentFolder = folderRepository.findByNameAndParentFolder(directory.getName(), parentFolder)
+                .orElseGet(() -> {
+                    FolderModel newFolder = FolderModel.builder()
+                            .name(directory.getName())
+                            .parentFolder(parentFolder)
+                            .createdBy(user)
+                            .build();
+                    return folderRepository.save(newFolder);
+                });
+
+        File[] contents = directory.listFiles();
+        if (contents != null) {
+            for (File item : contents) {
+                if (item.isDirectory()) {
+                    processDirectory(item, currentFolder, user);
+                } else {
+                    processFile(item, currentFolder, user);
+                }
+            }
+        }
+        return currentFolder;
+    }
+
+    private void processFile(File file, FolderModel folder, UserModel user) throws IOException {
+        try (FileInputStream input = new FileInputStream(file)) {
+            MultipartFile multipartFile = new MockMultipartFile(
+                    file.getName(),
+                    file.getName(),
+                    Files.probeContentType(file.toPath()),
+                    input
+            );
+
+            String storageKey = fileHelper.saveFileToDisk(multipartFile);
+            FileModel fileModel = fileHelper.buildFileModel(multipartFile, storageKey, folder, user);
+            fileHelper.saveFileModel(fileModel);
+        }
+    }
+
+    private File createTempDirectory() throws IOException {
+        return Files.createTempDirectory("zip_import_").toFile();
+    }
+
+    private void extractZip(ZipInputStream zipIn, File destDir) throws IOException {
+        ZipEntry entry;
+        byte[] buffer = new byte[1024];
+
+        while ((entry = zipIn.getNextEntry()) != null) {
+            File newFile = new File(destDir, entry.getName());
+
+            // Ensure the file will be created inside destDir
+            if (!newFile.toPath().normalize().startsWith(destDir.toPath().normalize())) {
+                throw new IOException("Entry is outside of target directory: " + entry.getName());
+            }
+
+            if (entry.isDirectory()) {
+                if (!newFile.isDirectory() && !newFile.mkdirs()) {
+                    throw new IOException("Failed to create directory " + newFile);
+                }
+            } else {
+                // Create parent directories if they don't exist
+                File parent = newFile.getParentFile();
+                if (!parent.isDirectory() && !parent.mkdirs()) {
+                    throw new IOException("Failed to create directory " + parent);
+                }
+
+                // Write file contents
+                try (FileOutputStream fos = new FileOutputStream(newFile)) {
+                    int len;
+                    while ((len = zipIn.read(buffer)) > 0) {
+                        fos.write(buffer, 0, len);
+                    }
+                }
+            }
+            zipIn.closeEntry();
+        }
+    }
+
+    // Helper class for converting File to MultipartFile
+    private static class MockMultipartFile implements MultipartFile {
+        private final String name;
+        private final String originalFilename;
+        private final String contentType;
+        private final byte[] content;
+
+        public MockMultipartFile(String name, String originalFilename, String contentType, FileInputStream contentStream)
+                throws IOException {
+            this.name = name;
+            this.originalFilename = originalFilename;
+            this.contentType = contentType;
+            this.content = IOUtils.toByteArray(contentStream);
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+
+        @Override
+        public String getOriginalFilename() {
+            return originalFilename;
+        }
+
+        @Override
+        public String getContentType() {
+            return contentType;
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return content.length == 0;
+        }
+
+        @Override
+        public long getSize() {
+            return content.length;
+        }
+
+        @Override
+        public byte[] getBytes() throws IOException {
+            return content;
+        }
+
+        @Override
+        public InputStream getInputStream() throws IOException {
+            return new ByteArrayInputStream(content);
+        }
+
+        @Override
+        public void transferTo(File dest) throws IOException, IllegalStateException {
+            Files.write(dest.toPath(), content);
+        }
     }
 
     public ResponseEntity<?> getFolderContents(Long folderId) {
@@ -176,7 +357,6 @@ public class FolderService {
         folderHelpers.softDeleteFolderRecursively(folder);
     }
 
-
     // Permanent delete (remove folder + all contents from DB)
     public void deleteFolderPermanently(Long folderId) {
         FolderModel folder = folderRepository.findById(folderId)
@@ -195,7 +375,6 @@ public class FolderService {
 
         folderHelpers.restoreFolderRecursively(folder);
     }
-
 
     public ResponseEntity<ContentDto> getBinContent() {
         // Find folders that are deleted but parent is not deleted

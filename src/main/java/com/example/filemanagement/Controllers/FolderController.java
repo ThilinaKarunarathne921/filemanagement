@@ -7,6 +7,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.core.io.Resource;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/folder")
@@ -24,6 +25,20 @@ public class FolderController {
         FolderDto createdFolder = folderService.createFolder(folderDto);
         return ResponseEntity.status(HttpStatus.CREATED).body(createdFolder);
     }
+
+    @PostMapping("/upload-zip")
+    public ResponseEntity<String> uploadZip(@RequestParam("file") MultipartFile file,
+                                            @RequestParam("userId") Long userId,
+                                            @RequestParam(value = "parentFolderId", required = false) Long parentFolderId) {
+        try {
+            folderService.importFromZip(file, userId, parentFolderId);
+            return ResponseEntity.ok("Folder uploaded successfully!");
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("Failed to upload folder: " + e.getMessage());
+        }
+    }
+
 
     // 9. Get Folder Contents
     @GetMapping("/{id}")
