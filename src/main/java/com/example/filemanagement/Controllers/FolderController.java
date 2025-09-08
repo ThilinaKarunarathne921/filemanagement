@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.core.io.Resource;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+
 @RestController
 @RequestMapping("/api/folder")
 public class FolderController {
@@ -19,34 +21,28 @@ public class FolderController {
         this.folderService = folderService;
     }
 
-    // 8. Create a Folder
     @PostMapping()
-    public ResponseEntity<FolderDto> createFolder(@RequestBody FolderDto folderDto) {
-        FolderDto createdFolder = folderService.createFolder(folderDto);
-        return ResponseEntity.status(HttpStatus.CREATED).body(createdFolder);
+    public ResponseEntity<?> createFolder(@RequestBody FolderDto folderDto) {
+        return folderService.createFolder(folderDto);
     }
 
     @PostMapping("/upload-zip")
-    public ResponseEntity<String> uploadZip(@RequestParam("file") MultipartFile file,
+    public ResponseEntity<?> uploadZip(@RequestParam("file") MultipartFile file,
                                             @RequestParam("userId") Long userId,
                                             @RequestParam(value = "parentFolderId", required = false) Long parentFolderId) {
         try {
-            folderService.importFromZip(file, userId, parentFolderId);
-            return ResponseEntity.ok("Folder uploaded successfully!");
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Failed to upload folder: " + e.getMessage());
+            return folderService.importFromZip(file, userId, parentFolderId);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("File upload failed..."+e.getLocalizedMessage());
         }
+
     }
 
-
-    // 9. Get Folder Contents
     @GetMapping("/{id}")
     public ResponseEntity<?> getFolderDetails(@PathVariable Long id) {
         return folderService.getFolderDetails(id);
     }
 
-    // 9. Get Folder Contents
     @GetMapping("/{id}/content")
     public ResponseEntity<?> getFolderContents(@PathVariable Long id) {
         return folderService.getFolderContents(id);
@@ -54,13 +50,11 @@ public class FolderController {
 
     //method to get content of the root folder.
 
-    // 10. Download Folder as ZIP
     @GetMapping("/{id}/download")
-    public ResponseEntity<Resource> downloadFolder(@PathVariable Long id) {
+    public ResponseEntity<?> downloadFolder(@PathVariable Long id) {
         return folderService.downloadFolder(id);
     }
 
-    // 11. Rename or Move Folder
     @PatchMapping("/{id}")
     public ResponseEntity<FolderDto> renameOrMoveFolder(@PathVariable Long id,
                                                         @RequestBody FolderDto folderDto) {
@@ -68,27 +62,21 @@ public class FolderController {
         return ResponseEntity.ok(updatedFolder);
     }
 
-    // 12. Soft Delete Folder (move to Bin)
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteFolder(@PathVariable Long id,
                                           @RequestParam(value = "permanent", required = false) Boolean permanent) {
         if (Boolean.TRUE.equals(permanent)) {
-            folderService.deleteFolderPermanently(id);
-            return ResponseEntity.ok().body("{\"message\": \"Folder was permanently deleted.\"}");
+            return folderService.deleteFolderPermanently(id);
         } else {
-            folderService.moveFolderToBin(id);
-            return ResponseEntity.ok().body("{\"message\": \"Folder moved to Bin\"}");
+            return folderService.moveFolderToBin(id);
         }
     }
 
-    // 13. Restore Folder from Bin
     @PatchMapping("/{id}/restore")
     public ResponseEntity<?> restoreFolder(@PathVariable Long id) {
-        folderService.restoreFolder(id);
-        return ResponseEntity.ok().body("{\"message\": \"Folder restored successfully\"}");
+        return folderService.restoreFolder(id);
     }
 
-    // 14. Get bin content
     @GetMapping("/bin")
     public ResponseEntity<?> binContent(){
         return folderService.getBinContent();

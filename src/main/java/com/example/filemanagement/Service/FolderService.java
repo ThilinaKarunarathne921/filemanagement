@@ -16,6 +16,7 @@ import org.apache.commons.io.IOUtils;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -51,7 +52,7 @@ public class FolderService {
     }
 
 
-    public FolderDto createFolder(FolderDto folderDto) {
+    public ResponseEntity<?> createFolder(FolderDto folderDto) {
         Long parentId = folderDto.getParentFolderId();
         if(!folderRepository.existsById(folderDto.getParentFolderId())){
             throw new IllegalArgumentException(
@@ -65,55 +66,54 @@ public class FolderService {
             );
         }
 
-        // Convert DTO -> Entity
         FolderModel folder = folderHelpers.mapToModel(folderDto);
 
-        // Save entity in DB
         FolderModel savedFolder = folderRepository.save(folder);
 
-        // Convert back Entity -> DTO
-        return folderHelpers.mapToDto(savedFolder);
+        FolderDto createdFolder = folderHelpers.mapToDto(savedFolder);
+
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(createdFolder);
     }
 
-    public void importFromZip(MultipartFile zipFile, Long userId, Long parentFolderId) throws IOException {
+    public ResponseEntity<?> importFromZip(MultipartFile zipFile, Long userId, Long parentFolderId) throws IOException {
         UserModel user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));    //check owner User validity
 
         FolderModel parentFolder = null;
-        if (parentFolderId != null) {
-            parentFolder = folderRepository.findById(parentFolderId)
+        if (parentFolderId != null) {                                      //check weather the file is belonged to root or inside a folder
+            parentFolder = folderRepository.findById(parentFolderId)       //if parent id was provided, check the validity
                     .orElseThrow(() -> new IllegalArgumentException("Parent folder not found"));
         }
 
-        File tempDir = createTempDirectory();
+        File tempDir = Files.createTempDirectory("zip_import_").toFile();       // create a temp folder to extract zip file
         try {
-            // Extract zip to temp directory
-            try (ZipInputStream zipIn = new ZipInputStream(zipFile.getInputStream())) {
+            try (ZipInputStream zipIn = new ZipInputStream(zipFile.getInputStream())) {  // Extract zip to temp directory
                 extractZip(zipIn, tempDir);
             }
 
-            // Process the contents of temp directory directly
-            File[] contents = tempDir.listFiles();
-            if (contents != null) {
-                for (File item : contents) {
-                    if (item.isDirectory()) {
+            File[] contents = tempDir.listFiles();  // get all files + folders to array.
+            if (contents != null) {  // if content not empty
+                for (File item : contents) {    // for each content
+                    if (item.isDirectory()) {   // if it is a directory
                         processDirectory(item, parentFolder, user);
-                    } else {
+                    } else {                    // if it is a file
                         // Handle files in root
                         processFile(item, parentFolder, user);
                     }
                 }
             }
-        } finally {
-            // Clean up temp directory
+        } finally {  // remove the temp file that zip file was extracted into
             FileUtils.deleteDirectory(tempDir);
         }
+        return ResponseEntity.ok("Folder uploaded successfully!");
     }
 
-    private FolderModel processDirectory(File directory, FolderModel parentFolder, UserModel user) throws IOException {
-        // Try to find existing folder or create new one
-        FolderModel currentFolder = folderRepository.findByNameAndParentFolder(directory.getName(), parentFolder)
-                .orElseGet(() -> {
+    //Process directories found on extracted zip file
+    private void processDirectory(File directory, FolderModel parentFolder, UserModel user) throws IOException {
+        FolderModel currentFolder = folderRepository.findByNameAndParentFolder(directory.getName(), parentFolder)  //check for folder already exist ( same name under same parentFolder )
+                .orElseGet(() -> {                                      //if no existing folder found, create new Folder Record
                     FolderModel newFolder = FolderModel.builder()
                             .name(directory.getName())
                             .parentFolder(parentFolder)
@@ -122,9 +122,9 @@ public class FolderService {
                     return folderRepository.save(newFolder);
                 });
 
-        File[] contents = directory.listFiles();
-        if (contents != null) {
-            for (File item : contents) {
+        File[] contents = directory.listFiles();  // get content ( files and folders) of the current directory
+        if (contents != null) {  // if it has content
+            for (File item : contents) {  // recursively handle them
                 if (item.isDirectory()) {
                     processDirectory(item, currentFolder, user);
                 } else {
@@ -132,26 +132,22 @@ public class FolderService {
                 }
             }
         }
-        return currentFolder;
     }
 
+    //process files found in content array
     private void processFile(File file, FolderModel folder, UserModel user) throws IOException {
-        try (FileInputStream input = new FileInputStream(file)) {
-            MultipartFile multipartFile = new MockMultipartFile(
+        try (FileInputStream input = new FileInputStream(file)) {  // get file content from input stram
+            MultipartFile multipartFile = new MockMultipartFile(   // create new multipart file using input stream of the file
                     file.getName(),
                     file.getName(),
                     Files.probeContentType(file.toPath()),
                     input
             );
 
-            String storageKey = fileHelper.saveFileToDisk(multipartFile);
-            FileModel fileModel = fileHelper.buildFileModel(multipartFile, storageKey, folder, user);
-            fileHelper.saveFileModel(fileModel);
+            String storageKey = fileHelper.saveFileToDisk(multipartFile);   // save file into disk and get storageKey
+            FileModel fileModel = fileHelper.buildFileModel(multipartFile, storageKey, folder, user); // crate a file Model
+            fileHelper.saveFileModel(fileModel);  // save the file model in the DB
         }
-    }
-
-    private File createTempDirectory() throws IOException {
-        return Files.createTempDirectory("zip_import_").toFile();
     }
 
     private void extractZip(ZipInputStream zipIn, File destDir) throws IOException {
@@ -234,12 +230,10 @@ public class FolderService {
             return content;
         }
 
-        @Override
         public InputStream getInputStream() throws IOException {
             return new ByteArrayInputStream(content);
         }
 
-        @Override
         public void transferTo(File dest) throws IOException, IllegalStateException {
             Files.write(dest.toPath(), content);
         }
@@ -282,7 +276,7 @@ public class FolderService {
         return ResponseEntity.ok(dto);
     }
 
-    public ResponseEntity<Resource> downloadFolder(Long folderId) {
+    public ResponseEntity<?> downloadFolder(Long folderId) {
         // Step 1: Find root folder
         FolderModel rootFolder = folderRepository.findById(folderId)
                 .orElseThrow(() -> new IllegalArgumentException("Folder not found"));
@@ -349,23 +343,23 @@ public class FolderService {
         return folderHelpers.mapToDto(updatedFolder);
     }
 
-    //soft delete
-    public void moveFolderToBin(Long folderId) {
+    public ResponseEntity<?> moveFolderToBin(Long folderId) {
         FolderModel folder = folderRepository.findById(folderId)
                 .orElseThrow(() -> new RuntimeException("Folder not found"));
 
         folderHelpers.softDeleteFolderRecursively(folder);
+        return ResponseEntity.ok().body("{\"message\": \"Folder moved to Bin\"}");
     }
 
-    // Permanent delete (remove folder + all contents from DB)
-    public void deleteFolderPermanently(Long folderId) {
+    public ResponseEntity<?> deleteFolderPermanently(Long folderId) {
         FolderModel folder = folderRepository.findById(folderId)
                 .orElseThrow(() -> new RuntimeException("Folder not found"));
 
         folderHelpers.deleteFolderRecursively(folder);
+        return ResponseEntity.ok().body("{\"message\": \"Folder was permanently deleted.\"}");
     }
 
-    public void restoreFolder(Long folderId) {
+    public ResponseEntity<?> restoreFolder(Long folderId) {
         FolderModel folder = folderRepository.findById(folderId)
                 .orElseThrow(() -> new RuntimeException("Folder not found"));
 
@@ -374,6 +368,7 @@ public class FolderService {
         }
 
         folderHelpers.restoreFolderRecursively(folder);
+        return ResponseEntity.ok().body("{\"message\": \"Folder restored successfully\"}");
     }
 
     public ResponseEntity<ContentDto> getBinContent() {

@@ -19,7 +19,6 @@ public class FileController {
         this.fileService = fileService;
     }
 
-
     @PostMapping("/upload")
     public ResponseEntity<?> uploadFiles(@RequestParam("files") List<MultipartFile> files,
                                          @RequestParam(value = "folderId", required = false) Long folderId,
@@ -30,10 +29,9 @@ public class FileController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<FileDto> getFileMetadata(@PathVariable Long id) {
+    public ResponseEntity<?> getFileMetadata(@PathVariable Long id) {
         return fileService.getFileMetadata(id);
     }
-
 
     @GetMapping("/{id}/download")
     public ResponseEntity<?> downloadFile(@PathVariable Long id) {
@@ -46,7 +44,6 @@ public class FileController {
                                                     @RequestBody FileDto fileDto) {
         return fileService.renameOrMoveFile(id, fileDto);
     }
-
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> moveFileToBin(@PathVariable Long id,
