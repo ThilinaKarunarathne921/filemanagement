@@ -6,16 +6,21 @@ import com.example.filemanagement.Models.FolderModel;
 import com.example.filemanagement.Models.UserModel;
 import com.example.filemanagement.Repositories.FileRepository;
 import com.example.filemanagement.Repositories.FolderRepository;
+import jakarta.validation.constraints.NotNull;
+import org.apache.commons.io.IOUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.web.multipart.MultipartFile;
 
-import java.io.IOException;
+
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 @Component
@@ -26,10 +31,12 @@ public class FolderHelper {
 
     private final FolderRepository folderRepository;
     private final FileRepository fileRepository;
+    private final FileHelper fileHelper;
 
-    public FolderHelper(FolderRepository folderRepository, FileRepository fileRepository) {
+    public FolderHelper(FolderRepository folderRepository, FileRepository fileRepository, FileHelper fileHelper) {
         this.folderRepository = folderRepository;
         this.fileRepository = fileRepository;
+        this.fileHelper = fileHelper;
     }
 
     public FolderDto mapToDto(FolderModel model) {
@@ -106,7 +113,6 @@ public class FolderHelper {
         }
     }
 
-
     public void softDeleteFolderRecursively(FolderModel folder) {
         LocalDateTime now = LocalDateTime.now();
 
@@ -127,7 +133,6 @@ public class FolderHelper {
             softDeleteFolderRecursively(subFolder);
         }
     }
-
 
     public void deleteFolderRecursively(FolderModel folder) {
         // delete all files in this folder
@@ -166,6 +171,134 @@ public class FolderHelper {
             if (subFolder.getDeletedAt() != null) {
                 restoreFolderRecursively(subFolder);
             }
+        }
+    }
+
+    //Process directories found on extracted zip file
+    public void processDirectory(File directory, FolderModel parentFolder, UserModel user) throws IOException {
+        FolderModel currentFolder = folderRepository.findByNameAndParentFolder(directory.getName(), parentFolder)  //check for folder already exist ( same name under same parentFolder )
+                .orElseGet(() -> {                                      //if no existing folder found, create new Folder Record
+                    FolderModel newFolder = FolderModel.builder()
+                            .name(directory.getName())
+                            .parentFolder(parentFolder)
+                            .createdBy(user)
+                            .build();
+                    return folderRepository.save(newFolder);
+                });
+
+        File[] contents = directory.listFiles();  // get content ( files and folders) of the current directory
+        if (contents != null) {  // if it has content
+            for (File item : contents) {  // recursively handle them
+                if (item.isDirectory()) {
+                    processDirectory(item, currentFolder, user);
+                } else {
+                    processFile(item, currentFolder, user);
+                }
+            }
+        }
+    }
+
+    //process files found in content array
+    public void processFile(File file, FolderModel folder, UserModel user) throws IOException {
+        try (FileInputStream input = new FileInputStream(file)) {  // get file content from input stram
+            MultipartFile multipartFile = new MockMultipartFile(   // create new multipart file using input stream of the file
+                    file.getName(),
+                    file.getName(),
+                    Files.probeContentType(file.toPath()),
+                    input
+            );
+
+            String storageKey = fileHelper.saveFileToDisk(multipartFile);   // save file into disk and get storageKey
+            FileModel fileModel = fileHelper.buildFileModel(multipartFile, storageKey, folder, user); // crate a file Model
+            fileHelper.saveFileModel(fileModel);  // save the file model in the DB
+        }
+    }
+
+    public void extractZip(ZipInputStream zipIn, File destDir) throws IOException {
+        ZipEntry entry;
+        byte[] buffer = new byte[4096];
+
+        while ((entry = zipIn.getNextEntry()) != null) {
+            File newFile = new File(destDir, entry.getName());
+
+            // Ensure the file will be created inside destDir
+            if (!newFile.toPath().normalize().startsWith(destDir.toPath().normalize())) {
+                throw new IOException("Entry is outside of target directory: " + entry.getName());
+            }
+
+            if (entry.isDirectory()) {
+                if (!newFile.isDirectory() && !newFile.mkdirs()) {
+                    throw new IOException("Failed to create directory " + newFile);
+                }
+            } else {
+                // Create parent directories if they don't exist
+                File parent = newFile.getParentFile();
+                if (!parent.isDirectory() && !parent.mkdirs()) {
+                    throw new IOException("Failed to create directory " + parent);
+                }
+
+                // Write file contents
+                try (FileOutputStream fos = new FileOutputStream(newFile)) {
+                    int len;
+                    while ((len = zipIn.read(buffer)) > 0) {
+                        fos.write(buffer, 0, len);
+                    }
+                }
+            }
+            zipIn.closeEntry();
+        }
+    }
+    // Helper class for converting File to MultipartFile
+    public static class MockMultipartFile implements MultipartFile {
+        private final String name;
+        private final String originalFilename;
+        private final String contentType;
+        private final byte[] content;
+
+        public MockMultipartFile(String name, String originalFilename, String contentType, FileInputStream contentStream)
+                throws IOException {
+            this.name = name;
+            this.originalFilename = originalFilename;
+            this.contentType = contentType;
+            this.content = IOUtils.toByteArray(contentStream);
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+
+        @Override
+        public String getOriginalFilename() {
+            return originalFilename;
+        }
+
+        @Override
+        public String getContentType() {
+            return contentType;
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return content.length == 0;
+        }
+
+        @Override
+        public long getSize() {
+            return content.length;
+        }
+
+        @Override
+        public byte[] getBytes() throws IOException {
+            return content;
+        }
+
+        public InputStream getInputStream() throws IOException {
+            return new ByteArrayInputStream(content);
+        }
+
+        public void transferTo(File dest) throws IOException, IllegalStateException {
+            Files.write(dest.toPath(), content);
         }
     }
 

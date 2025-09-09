@@ -81,4 +81,9 @@ public class FolderController {
     public ResponseEntity<?> binContent(){
         return folderService.getBinContent();
     }
+
+    @GetMapping("root")
+    public ResponseEntity<?> rootDirectory(){
+        return folderService.rootContent();
+    }
 }
