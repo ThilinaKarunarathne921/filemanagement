@@ -72,7 +72,6 @@ public class FileService {
         return ResponseEntity.status(HttpStatus.CREATED).body(uploadedFiles);
     }
 
-
     public ResponseEntity<FileDto> getFileMetadata(Long id) {
         FileModel file = fileRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("File not found with id: " + id));
@@ -81,30 +80,21 @@ public class FileService {
         return ResponseEntity.ok(dto);
     }
 
-
     public ResponseEntity<Resource> downloadFile(Long id) {
 
-        // Step 1: Find file metadata
-        FileModel fileModel = fileRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("File not found with id: " + id));
+        FileModel fileModel = fileRepository.findById(id) //Find file metadata
+                .orElseThrow(() -> new IllegalArgumentException("File not found with id: " + id));  //not found
 
-        // Step 2: Build path to file
-        Path filePath = Paths.get(uploadDir).resolve(fileModel.getStorageKey()).normalize();
+        Path filePath = Paths.get(uploadDir).resolve(fileModel.getStorageKey()).normalize();  //Build path to file
 
-        // Step 3: Load file as Resource
         UrlResource resource = null;
         try {
-            resource = new UrlResource(filePath.toUri());
+            resource = new UrlResource(filePath.toUri());  // Load file as Resource
         } catch (MalformedURLException e) {
-            throw new IllegalArgumentException(e);
+            throw new IllegalArgumentException("File can't get from the disk" + e);
         }
 
-        if (resource ==null) {
-            throw new IllegalArgumentException("File not found on disk: " + filePath);
-        }
-
-        // Step 4: Build response with headers
-        return ResponseEntity.ok()
+        return ResponseEntity.ok()   //Build response with headers
                 .contentType(MediaType.parseMediaType(fileModel.getType()))
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=\"" + fileModel.getName() + "\"")
@@ -112,33 +102,31 @@ public class FileService {
 
     }
 
-
     public ResponseEntity<FileDto> renameOrMoveFile(Long id, FileDto fileDto) {
-        // Step 1: Find the file by ID
-        FileModel fileModel = fileRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("File not found with id: " + id));
 
-        // Step 2: Apply changes (only update what is provided in DTO)
-        if (fileDto.getName() != null && !fileDto.getName().isBlank()) {
+        FileModel fileModel = fileRepository.findById(id)  //Find the file by ID
+                .orElseThrow(() -> new IllegalArgumentException("File not found with id: " + id));  // not found
+
+        if (fileDto.getName() != null && !fileDto.getName().isBlank()) {  //change name ( if not null or blank)
             fileModel.setName(fileDto.getName());
         }
 
-        if (fileDto.getFolderId() != null) {
-            FolderModel folder = folderRepository.findById(fileDto.getFolderId())
-                    .orElseThrow(() -> new IllegalArgumentException("Folder not found with id: " + fileDto.getFolderId()));
+        if (fileDto.getFolderId() != null) {  // if new folder id is not null
+            FolderModel folder = folderRepository.findById(fileDto.getFolderId())  // set new folder
+                    .orElseThrow(() -> new IllegalArgumentException("Folder not found with id: " + fileDto.getFolderId())); // folder id provided but not found
             fileModel.setFolder(folder);
         }
+        else{ // folder id is null ( move to root directory)
+            fileModel.setFolder(null);
+        }
 
-        // Step 3: Save changes
         fileRepository.save(fileModel);
 
-        // Step 4: Map back to DTO
         FileDto updatedDto = fileHelper.mapToDto(fileModel);
 
         return ResponseEntity.ok(updatedDto);
     }
 
-    // Move file to recycle bin (soft delete)
     public ResponseEntity<FileDto> moveFileToBin(Long id) {
         FileModel fileModel = fileRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("File not found with id: " + id));
@@ -149,7 +137,6 @@ public class FileService {
         return ResponseEntity.ok(fileHelper.mapToDto(updated));
     }
 
-    // Delete permanently (hard delete)
     public ResponseEntity<Void> deleteFilePermanently(Long id) {
         FileModel fileModel = fileRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("File not found with id: " + id));
@@ -159,7 +146,6 @@ public class FileService {
         return ResponseEntity.noContent().build();
     }
 
-    // Restore file (undo soft delete)
     public ResponseEntity<FileDto> restoreFile(Long id) {
         FileModel fileModel = fileRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("File not found with id: " + id));

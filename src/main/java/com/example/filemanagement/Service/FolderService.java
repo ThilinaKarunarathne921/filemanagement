@@ -27,7 +27,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
@@ -51,23 +50,23 @@ public class FolderService {
 
     public ResponseEntity<?> createFolder(FolderDto folderDto) {
         Long parentId = folderDto.getParentFolderId();
-        if(!folderRepository.existsById(folderDto.getParentFolderId())){
+        if(parentId!=null && !folderRepository.existsById(parentId)){ // has a parent Id and No folder with that id
             throw new IllegalArgumentException(
                     "Parent folder with id "+folderDto.getParentFolderId()+" not exist"
             );
         }
 
-        if (folderRepository.existsByNameAndParentFolder_Id(folderDto.getName(), parentId)) {
+        if (folderRepository.existsByNameAndParentFolder_Id(folderDto.getName(), parentId)) {  // has a folder with same name under same parent folder
             throw new IllegalArgumentException(
                     "A folder with name '" + folderDto.getName() + "' already exists in this parent folder."
             );
         }
 
-        FolderModel folder = folderHelpers.mapToModel(folderDto);
+        FolderModel folder = folderHelpers.mapToModel(folderDto); // create a model
 
-        FolderModel savedFolder = folderRepository.save(folder);
+        FolderModel savedFolder = folderRepository.save(folder);  // save model
 
-        FolderDto createdFolder = folderHelpers.mapToDto(savedFolder);
+        FolderDto createdFolder = folderHelpers.mapToDto(savedFolder);  //create dto from saved model
 
         return ResponseEntity
                 .status(HttpStatus.CREATED)
@@ -108,18 +107,15 @@ public class FolderService {
     }
 
     public ResponseEntity<?> getFolderContents(Long folderId) {
-        // Step 1: Find folder
-        FolderModel folder = folderRepository.findById(folderId)
+
+        FolderModel folder = folderRepository.findById(folderId)  // Find folder
                 .orElseThrow(() -> new IllegalArgumentException("Folder not found with id: " + folderId));
 
-        // Step 2: Get child folders (not deleted)
-        List<FolderModel> subFolders = folderRepository.findByParentFolderAndDeletedAtIsNull(folder);
+        List<FolderModel> subFolders = folderRepository.findByParentFolderAndDeletedAtIsNull(folder); // Get child folders (not deleted)
 
-        // Step 3: Get files inside folder (not deleted)
-        List<FileModel> files = fileRepository.findByFolderAndDeletedAtIsNull(folder);
+        List<FileModel> files = fileRepository.findByFolderAndDeletedAtIsNull(folder); //Get files inside folder (not deleted)
 
-        // Step 4: Map to DTOs
-        List<FolderDto> folderDtos = subFolders.stream()
+        List<FolderDto> folderDtos = subFolders.stream() // Map to DTOs
                 .map(folderHelpers::mapToDto)
                 .toList();
 
@@ -127,8 +123,7 @@ public class FolderService {
                 .map(fileHelper::mapToDto)
                 .toList();
 
-        // Step 5: Wrap into ContentDto
-        ContentDto contentDto = new ContentDto();
+        ContentDto contentDto = new ContentDto(); // create ContentDto
         contentDto.setFolders(folderDtos);
         contentDto.setFiles(fileDtos);
 
@@ -137,35 +132,33 @@ public class FolderService {
 
     public ResponseEntity<?> getFolderDetails(Long folderId) {
 
-        FolderModel folder = folderRepository.findById(folderId)
-                .orElseThrow(() -> new IllegalArgumentException("Folder not found with id: " + folderId));
+        FolderModel folder = folderRepository.findById(folderId)  // get record
+                .orElseThrow(() -> new IllegalArgumentException("Folder not found with id: " + folderId));  // no record found
 
         FolderDto dto = folderHelpers.mapToDto(folder);
         return ResponseEntity.ok(dto);
     }
 
     public ResponseEntity<?> downloadFolder(Long folderId) {
-        // Step 1: Find root folder
-        FolderModel rootFolder = folderRepository.findById(folderId)
+
+        FolderModel rootFolder = folderRepository.findById(folderId) // Find root folder
                 .orElseThrow(() -> new IllegalArgumentException("Folder not found"));
 
-        // Step 2: Create temporary zip file
-        Path tempZip;
+        Path tempZip;  //Create temporary zip file
         try {
             tempZip = Files.createTempFile("folder-", ".zip");
         } catch (IOException e) {
             throw new IllegalArgumentException("Could not create temp file for ZIP", e);
         }
 
-        // Step 3: Build zip recursively
-        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(tempZip))) {
+        try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(tempZip))) {   // Build zip recursively
             folderHelpers.addFolderToZip(rootFolder, "", zos);
         } catch (IOException e) {
             throw new IllegalArgumentException("Failed to create ZIP file", e);
         }
-        // Step 4: Return as Resource
+
         Resource resource;
-        try {
+        try {   // Return as Resource
             resource = new UrlResource(tempZip.toUri());
         } catch (MalformedURLException e) {
             throw new IllegalArgumentException(e);
@@ -178,17 +171,18 @@ public class FolderService {
     }
 
     public FolderDto renameOrMoveFolder(Long id, FolderDto folderDto) {
-        // Step 1: Find the folder to update
-        FolderModel folder = folderRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Folder not found with id: " + id));
 
-        // Step 2: Handle rename
-        if (folderDto.getName() != null && !folderDto.getName().isBlank()) {
-            folder.setName(folderDto.getName());
+        FolderModel folder = folderRepository.findById(id)  //Find the folder to update
+                .orElseThrow(() -> new RuntimeException("Folder not found with id: " + id));  // no file found for the id
+
+        if (folderDto.getName() != null && !folderDto.getName().isBlank()) {  // has provided a new name
+            folder.setName(folderDto.getName()); // set new name
         }
 
-        // Step 3: Handle move
-        if (folderDto.getParentFolderId() != null) {
+        if (folderDto.getParentFolderId() != null) { // has a parent folder id
+            if(folderDto.getParentFolderId().equals(folder.getParentFolder().getId())){  //
+                throw new IllegalArgumentException("cannot move to same directory");
+            }
             FolderModel newParent = folderRepository.findById(folderDto.getParentFolderId())
                     .orElseThrow(() -> new RuntimeException("Parent folder not found"));
 

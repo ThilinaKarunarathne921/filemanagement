@@ -90,18 +90,15 @@ public class FolderHelper {
     public void addFolderToZip(FolderModel folder, String parentPath, ZipOutputStream zos) throws IOException {
         String folderPath = parentPath + folder.getName() + "/";
 
-        // Step 0: Add folder entry itself (even if empty)
-        zos.putNextEntry(new ZipEntry(folderPath));
+        zos.putNextEntry(new ZipEntry(folderPath)); //Add folder entry itself (even if empty)
         zos.closeEntry();
 
-        // Step 1: Add subfolders recursively
-        List<FolderModel> subFolders = folderRepository.findByParentFolderAndDeletedAtIsNull(folder);
+        List<FolderModel> subFolders = folderRepository.findByParentFolderAndDeletedAtIsNull(folder);  //Add subfolders recursively (not deleted)
         for (FolderModel subFolder : subFolders) {
             addFolderToZip(subFolder, folderPath, zos);
         }
 
-        // Step 2: Add files inside this folder
-        List<FileModel> files = fileRepository.findByFolderAndDeletedAtIsNull(folder);
+        List<FileModel> files = fileRepository.findByFolderAndDeletedAtIsNull(folder);   //Add files inside this folder (not deleted)
         for (FileModel file : files) {
             Path filePath = Paths.get(uploadDir).resolve(file.getStorageKey()).normalize();
             if (Files.exists(filePath)) {
@@ -215,30 +212,27 @@ public class FolderHelper {
     }
 
     public void extractZip(ZipInputStream zipIn, File destDir) throws IOException {
-        ZipEntry entry;
+        ZipEntry entry; // one item
         byte[] buffer = new byte[4096];
 
-        while ((entry = zipIn.getNextEntry()) != null) {
-            File newFile = new File(destDir, entry.getName());
+        while ((entry = zipIn.getNextEntry()) != null) {  // check next entry ( file or folder ) exist then
+            File newFile = new File(destDir, entry.getName());  // get name of the next entry ( path/name.type)
 
-            // Ensure the file will be created inside destDir
-            if (!newFile.toPath().normalize().startsWith(destDir.toPath().normalize())) {
+            if (!newFile.toPath().normalize().startsWith(destDir.toPath().normalize())) { // Ensure the file will be created inside destDir ( path should start with destDir)
                 throw new IOException("Entry is outside of target directory: " + entry.getName());
             }
 
-            if (entry.isDirectory()) {
-                if (!newFile.isDirectory() && !newFile.mkdirs()) {
+            if (entry.isDirectory()) {  // if entry ends with "/"
+                if (!newFile.isDirectory() && !newFile.mkdirs()) {  // create new directory
                     throw new IOException("Failed to create directory " + newFile);
                 }
-            } else {
-                // Create parent directories if they don't exist
-                File parent = newFile.getParentFile();
-                if (!parent.isDirectory() && !parent.mkdirs()) {
+            } else {  // entry is a file
+                File parent = newFile.getParentFile();  // set parent as current directory
+                if (!parent.isDirectory() && !parent.mkdirs()) {  // parent folder is Not existed
                     throw new IOException("Failed to create directory " + parent);
                 }
 
-                // Write file contents
-                try (FileOutputStream fos = new FileOutputStream(newFile)) {
+                try (FileOutputStream fos = new FileOutputStream(newFile)) { // Write file contents
                     int len;
                     while ((len = zipIn.read(buffer)) > 0) {
                         fos.write(buffer, 0, len);
