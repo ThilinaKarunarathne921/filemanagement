@@ -12,7 +12,6 @@ import com.example.filemanagement.Repositories.FileRepository;
 import com.example.filemanagement.Repositories.FolderRepository;
 import com.example.filemanagement.Repositories.UserRepository;
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpHeaders;
@@ -40,7 +39,6 @@ public class FolderService {
     private final UserRepository userRepository;
     private final FolderHelper folderHelpers;
     private final FileHelper fileHelper;
-    private final FileService fileService;
 
     public FolderService(FolderRepository folderRepository, FileRepository fileRepository, UserRepository userRepository, FolderHelper folderHelpers, FileHelper fileHelper, FileService fileService) {
         this.folderRepository = folderRepository;
@@ -48,7 +46,6 @@ public class FolderService {
         this.userRepository = userRepository;
         this.folderHelpers = folderHelpers;
         this.fileHelper = fileHelper;
-        this.fileService = fileService;
     }
 
 
@@ -90,17 +87,17 @@ public class FolderService {
         File tempDir = Files.createTempDirectory("zip_import_").toFile();       // create a temp folder to extract zip file
         try {
             try (ZipInputStream zipIn = new ZipInputStream(zipFile.getInputStream())) {  // Extract zip to temp directory
-                extractZip(zipIn, tempDir);
+                folderHelpers.extractZip(zipIn, tempDir);
             }
 
             File[] contents = tempDir.listFiles();  // get all files + folders to array.
             if (contents != null) {  // if content not empty
                 for (File item : contents) {    // for each content
                     if (item.isDirectory()) {   // if it is a directory
-                        processDirectory(item, parentFolder, user);
+                        folderHelpers.processDirectory(item, parentFolder, user);
                     } else {                    // if it is a file
                         // Handle files in root
-                        processFile(item, parentFolder, user);
+                        folderHelpers.processFile(item, parentFolder, user);
                     }
                 }
             }
@@ -108,135 +105,6 @@ public class FolderService {
             FileUtils.deleteDirectory(tempDir);
         }
         return ResponseEntity.ok("Folder uploaded successfully!");
-    }
-
-    //Process directories found on extracted zip file
-    private void processDirectory(File directory, FolderModel parentFolder, UserModel user) throws IOException {
-        FolderModel currentFolder = folderRepository.findByNameAndParentFolder(directory.getName(), parentFolder)  //check for folder already exist ( same name under same parentFolder )
-                .orElseGet(() -> {                                      //if no existing folder found, create new Folder Record
-                    FolderModel newFolder = FolderModel.builder()
-                            .name(directory.getName())
-                            .parentFolder(parentFolder)
-                            .createdBy(user)
-                            .build();
-                    return folderRepository.save(newFolder);
-                });
-
-        File[] contents = directory.listFiles();  // get content ( files and folders) of the current directory
-        if (contents != null) {  // if it has content
-            for (File item : contents) {  // recursively handle them
-                if (item.isDirectory()) {
-                    processDirectory(item, currentFolder, user);
-                } else {
-                    processFile(item, currentFolder, user);
-                }
-            }
-        }
-    }
-
-    //process files found in content array
-    private void processFile(File file, FolderModel folder, UserModel user) throws IOException {
-        try (FileInputStream input = new FileInputStream(file)) {  // get file content from input stram
-            MultipartFile multipartFile = new MockMultipartFile(   // create new multipart file using input stream of the file
-                    file.getName(),
-                    file.getName(),
-                    Files.probeContentType(file.toPath()),
-                    input
-            );
-
-            String storageKey = fileHelper.saveFileToDisk(multipartFile);   // save file into disk and get storageKey
-            FileModel fileModel = fileHelper.buildFileModel(multipartFile, storageKey, folder, user); // crate a file Model
-            fileHelper.saveFileModel(fileModel);  // save the file model in the DB
-        }
-    }
-
-    private void extractZip(ZipInputStream zipIn, File destDir) throws IOException {
-        ZipEntry entry;
-        byte[] buffer = new byte[1024];
-
-        while ((entry = zipIn.getNextEntry()) != null) {
-            File newFile = new File(destDir, entry.getName());
-
-            // Ensure the file will be created inside destDir
-            if (!newFile.toPath().normalize().startsWith(destDir.toPath().normalize())) {
-                throw new IOException("Entry is outside of target directory: " + entry.getName());
-            }
-
-            if (entry.isDirectory()) {
-                if (!newFile.isDirectory() && !newFile.mkdirs()) {
-                    throw new IOException("Failed to create directory " + newFile);
-                }
-            } else {
-                // Create parent directories if they don't exist
-                File parent = newFile.getParentFile();
-                if (!parent.isDirectory() && !parent.mkdirs()) {
-                    throw new IOException("Failed to create directory " + parent);
-                }
-
-                // Write file contents
-                try (FileOutputStream fos = new FileOutputStream(newFile)) {
-                    int len;
-                    while ((len = zipIn.read(buffer)) > 0) {
-                        fos.write(buffer, 0, len);
-                    }
-                }
-            }
-            zipIn.closeEntry();
-        }
-    }
-
-    // Helper class for converting File to MultipartFile
-    private static class MockMultipartFile implements MultipartFile {
-        private final String name;
-        private final String originalFilename;
-        private final String contentType;
-        private final byte[] content;
-
-        public MockMultipartFile(String name, String originalFilename, String contentType, FileInputStream contentStream)
-                throws IOException {
-            this.name = name;
-            this.originalFilename = originalFilename;
-            this.contentType = contentType;
-            this.content = IOUtils.toByteArray(contentStream);
-        }
-
-        @Override
-        public String getName() {
-            return name;
-        }
-
-        @Override
-        public String getOriginalFilename() {
-            return originalFilename;
-        }
-
-        @Override
-        public String getContentType() {
-            return contentType;
-        }
-
-        @Override
-        public boolean isEmpty() {
-            return content.length == 0;
-        }
-
-        @Override
-        public long getSize() {
-            return content.length;
-        }
-
-        @Override
-        public byte[] getBytes() throws IOException {
-            return content;
-        }
-
-        public InputStream getInputStream() throws IOException {
-            return new ByteArrayInputStream(content);
-        }
-
-        public void transferTo(File dest) throws IOException, IllegalStateException {
-            Files.write(dest.toPath(), content);
-        }
     }
 
     public ResponseEntity<?> getFolderContents(Long folderId) {
@@ -371,7 +239,7 @@ public class FolderService {
         return ResponseEntity.ok().body("{\"message\": \"Folder restored successfully\"}");
     }
 
-    public ResponseEntity<ContentDto> getBinContent() {
+    public ResponseEntity<?> getBinContent() {
         // Find folders that are deleted but parent is not deleted
         List<FolderModel> deletedFolders = folderRepository.findByDeletedAtIsNotNullAndParentFolderDeletedAtIsNull();
         List<FolderDto> folderDtos = deletedFolders.stream()
@@ -391,5 +259,23 @@ public class FolderService {
         return ResponseEntity.ok(binContent);
     }
 
+    public ResponseEntity<?> rootContent() {
+        ContentDto content = new ContentDto();
 
+        List<FileModel> files = fileRepository.findByFolder(null);
+        List<FolderModel> folders = folderRepository.findByParentFolder(null);
+
+        List<FileDto> fileDtos = files.stream()
+                .map(fileHelper::mapToDto)
+                .toList();
+
+        List<FolderDto> folderDtos = folders.stream()
+                .map(folderHelpers::mapToDto)
+                .toList();
+
+        content.setFiles(fileDtos);
+        content.setFolders(folderDtos);
+
+        return ResponseEntity.ok(content);
+    }
 }
